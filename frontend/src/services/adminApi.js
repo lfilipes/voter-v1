@@ -1,175 +1,193 @@
 /**
- * Serviço de API para o módulo Admin
- * Todas as chamadas para o backend Flask ficam aqui
+ * Admin API service - Complete redesigned
  */
 
 import { auth } from './firebase'
 
 const API_URL = process.env.REACT_APP_FLASK_API_URL || 'http://localhost:5000/api'
 
-/**
- * Obtém o token de autenticação do Firebase
- */
 async function getIdToken() {
   const user = auth.currentUser
   if (!user) throw new Error('Usuário não autenticado')
-  
-  // Força renovação do token
-  const token = await user.getIdToken(true)
-  return token
+  return await user.getIdToken(true)
 }
 
-/**
- * Upload de Excel com votantes
- */
-export async function uploadVotersExcel(file, electionData) {
+// ============ CONDOMINIUMS ============
+
+export async function getCondominiums() {
+  try {
+    const token = await getIdToken()
+    const res = await fetch(`${API_URL}/admin/condominiums`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    const data = await res.json()
+    return data
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+}
+
+export async function createCondominium(condData) {
+  try {
+    const token = await getIdToken()
+    const res = await fetch(`${API_URL}/admin/condominiums`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(condData)
+    })
+    return await res.json()
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+}
+
+// ============ RESIDENTS ============
+
+export async function getResidents(condId) {
+  try {
+    const token = await getIdToken()
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/residents`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    return await res.json()
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+}
+
+export async function uploadResidentsExcel(condId, file) {
   try {
     const token = await getIdToken()
     const formData = new FormData()
-    
     formData.append('file', file)
-    formData.append('election_name', electionData.name)
-    formData.append('election_number', electionData.number)
-    formData.append('election_date', electionData.date || '')
     
-    const response = await fetch(`${API_URL}/admin/upload-voters`, {
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/residents/upload`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
+      headers: { 'Authorization': `Bearer ${token}` },
       body: formData
     })
-    
-    const data = await response.json()
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Erro ao fazer upload')
-    }
-    
-    return { success: true, data }
+    return await res.json()
   } catch (error) {
-    console.error('Upload de Excel falhou:', error)
     return { success: false, error: error.message }
   }
 }
 
-/**
- * Upload de PDF de procuração com dados do formulário
- */
-export async function uploadProxyPdf(file, formData) {
+// ============ PROXIES ============
+
+export async function getProxies(condId) {
   try {
     const token = await getIdToken()
-    const data = new FormData()
-    
-    data.append('file', file)
-    data.append('apartment', formData.apartment)
-    data.append('grantor_email', formData.grantor_email)
-    data.append('grantor_cpf', formData.grantor_cpf)
-    data.append('grantee_cpf', formData.grantee_cpf)
-    
-    console.log('Enviando dados para o backend:')
-    console.log('  - Apartamento:', formData.apartment)
-    console.log('  - Email outorgante:', formData.grantor_email)
-    console.log('  - CPF outorgante:', formData.grantor_cpf)
-    console.log('  - CPF outorgado:', formData.grantee_cpf)
-    console.log('  - Arquivo:', file.name)
-    
-    const response = await fetch(`${API_URL}/admin/upload-proxy`, {
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/proxies`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    return await res.json()
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+}
+
+export async function createProxy(condId, proxyData) {
+  try {
+    const token = await getIdToken()
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/proxies`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
-      body: data
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(proxyData)
     })
-    
-    const result = await response.json()
-    
-    if (!response.ok) {
-      throw new Error(result.error || 'Erro ao fazer upload')
-    }
-    
-    console.log('Resposta do backend:', result)
-    return { success: true, data: result }
+    return await res.json()
   } catch (error) {
-    console.error('Upload de PDF falhou:', error)
     return { success: false, error: error.message }
   }
 }
 
-/**
- * Lista todas as votações
- */
-export async function listElections() {
+// ============ ASSEMBLI Items ============
+// Adicione esta função ao adminApi.js
+
+export async function addAssemblyItem(condId, assemblyNumber, itemData) {
   try {
     const token = await getIdToken()
-    
-    const response = await fetch(`${API_URL}/admin/elections`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/assemblies/${assemblyNumber}/items`, {
+      method: 'POST',
+      headers: { 
+        'Authorization': `Bearer ${token}`, 
+        'Content-Type': 'application/json' 
+      },
+      body: JSON.stringify(itemData)
     })
-    
-    const data = await response.json()
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Erro ao buscar votações')
-    }
-    
-    return { success: true, elections: data.elections, count: data.count }
+    return await res.json()
   } catch (error) {
-    console.error('Erro ao listar votações:', error)
-    return { success: false, error: error.message, elections: [] }
+    return { success: false, error: error.message }
+  }
+}
+// ============ ASSEMBLIES ============
+export async function getAssemblies(condId) {
+  try {
+    const token = await getIdToken()
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/assemblies`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    return await res.json()
+  } catch (error) {
+    return { success: false, error: error.message }
   }
 }
 
-/**
- * Busca todos os votantes de uma votação específica
- */
-export async function getVotersByElection(electionNumber) {
+export async function createAssembly(condId, assemblyData) {
   try {
     const token = await getIdToken()
-    
-    const response = await fetch(`${API_URL}/admin/voters/${encodeURIComponent(electionNumber)}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/assemblies`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(assemblyData)
     })
-    
-    const data = await response.json()
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Erro ao buscar votantes')
-    }
-    
-    return { success: true, voters: data.voters, count: data.count }
+    return await res.json()
   } catch (error) {
-    console.error('Erro ao buscar votantes:', error)
-    return { success: false, error: error.message, voters: [] }
+    return { success: false, error: error.message }
   }
 }
 
-/**
- * Lista todas as procurações
- */
-export async function listProxies() {
+export async function getAssemblyItems(condId, assemblyNumber) {
   try {
     const token = await getIdToken()
-    
-    const response = await fetch(`${API_URL}/admin/proxies`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/assemblies/${assemblyNumber}/items`, {
+      headers: { 'Authorization': `Bearer ${token}` }
     })
-    
-    const data = await response.json()
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Erro ao buscar procurações')
-    }
-    
-    return { success: true, proxies: data.proxies, count: data.count }
+    return await res.json()
   } catch (error) {
-    console.error('Erro ao listar procurações:', error)
-    return { success: false, error: error.message, proxies: [] }
+    return { success: false, error: error.message }
+  }
+}
+
+export async function updateItemRelease(condId, assemblyNumber, itemId, isReleased) {
+  try {
+    const token = await getIdToken()
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/assemblies/${assemblyNumber}/items/${itemId}/release`, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_released: isReleased })
+    })
+    return await res.json()
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+}
+
+export async function uploadAssemblyExcel(condId, file, assemblyName, assemblyNumber, assemblyDate) {
+  try {
+    const token = await getIdToken()
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('assembly_name', assemblyName)
+    formData.append('assembly_number', assemblyNumber)
+    formData.append('assembly_date', assemblyDate)
+    
+    const res = await fetch(`${API_URL}/admin/condominiums/${condId}/assemblies/upload-excel`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: formData
+    })
+    return await res.json()
+  } catch (error) {
+    return { success: false, error: error.message }
   }
 }

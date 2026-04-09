@@ -65,7 +65,7 @@ export default function AdminLogin() {
     
     try {
       await signInWithEmailAndPassword(auth, email, password)
-      navigate('/admin/dashboard')
+      navigate('/admin/condominios')
     } catch (err) {
       console.error('Erro no login:', err)
       if (err.code === 'auth/user-not-found') {

@@ -6,33 +6,32 @@
  * - nome (obrigatório)
  * - email (obrigatório)
  * - apartamento (obrigatório)
- * - cpf (obrigatório - CPF do dono do apartamento)
+ * - cpf (obrigatório)
  */
 
 import { useState } from 'react'
+import { useParams } from 'react-router-dom'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { Alert, AlertDescription } from '../../components/ui/alert'
-import { uploadVotersExcel } from '../../services/adminApi'
+import { uploadResidentsExcel } from '../../services/adminApi'
 
 export default function UploadVoters({ onSuccess }) {
+  const { condId } = useParams()  // Get condominium ID from URL
   const [file, setFile] = useState(null)
-  const [electionName, setElectionName] = useState('')
-  const [electionNumber, setElectionNumber] = useState('')
-  const [electionDate, setElectionDate] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [validationErrors, setValidationErrors] = useState([])
+  const [importSummary, setImportSummary] = useState(null)
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0]
     if (selectedFile && (selectedFile.name.endsWith('.xlsx') || selectedFile.name.endsWith('.xls'))) {
       setFile(selectedFile)
       setError('')
-      setValidationErrors([])
+      setImportSummary(null)
     } else {
       setFile(null)
       setError('Por favor, selecione um arquivo Excel válido (.xlsx ou .xls)')
@@ -47,38 +46,22 @@ export default function UploadVoters({ onSuccess }) {
       return
     }
     
-    if (!electionName.trim()) {
-      setError('Digite o nome da votação')
-      return
-    }
-    
-    if (!electionNumber.trim()) {
-      setError('Digite o número da votação')
-      return
-    }
-    
     setLoading(true)
     setError('')
     setSuccess('')
-    setValidationErrors([])
+    setImportSummary(null)
     
-    const result = await uploadVotersExcel(file, {
-      name: electionName,
-      number: electionNumber,
-      date: electionDate
-    })
+    const result = await uploadResidentsExcel(condId, file)
     
     if (result.success) {
-      setSuccess(`Votação "${electionName}" cadastrada com sucesso! ${result.data.voters_saved} votantes importados.`)
-      
-      if (result.data.errors && result.data.errors.length > 0) {
-        setValidationErrors(result.data.errors)
-      }
-      
+      setSuccess(`${result.created} votantes importados com sucesso!`)
+      setImportSummary({
+        created: result.created,
+        total: result.total,
+        errors: result.errors,
+        warnings: result.warnings
+      })
       setFile(null)
-      setElectionName('')
-      setElectionNumber('')
-      setElectionDate('')
       document.getElementById('excel-file').value = ''
       if (onSuccess) onSuccess()
     } else {
@@ -94,7 +77,7 @@ export default function UploadVoters({ onSuccess }) {
         <CardTitle>Upload de Votantes</CardTitle>
         <CardDescription>
           Faça upload de uma planilha Excel com os dados dos votantes.
-          O arquivo deve conter as colunas: <strong>nome</strong>, <strong>email</strong>, <strong>apartamento</strong> e <strong>cpf</strong> (CPF do dono do apartamento).
+          O arquivo deve conter as colunas: <strong>nome</strong>, <strong>email</strong>, <strong>apartamento</strong> e <strong>cpf</strong>.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -111,53 +94,18 @@ export default function UploadVoters({ onSuccess }) {
             </Alert>
           )}
           
-          {validationErrors.length > 0 && (
+          {importSummary && importSummary.warnings && importSummary.warnings.length > 0 && (
             <Alert className="bg-yellow-50 border-yellow-500">
               <AlertDescription className="text-yellow-700">
-                <p className="font-bold">Avisos de validação:</p>
+                <p className="font-bold">Avisos:</p>
                 <ul className="list-disc list-inside text-sm mt-1">
-                  {validationErrors.slice(0, 5).map((err, idx) => (
-                    <li key={idx}>{err}</li>
+                  {importSummary.warnings.slice(0, 5).map((w, idx) => (
+                    <li key={idx}>{w}</li>
                   ))}
-                  {validationErrors.length > 5 && (
-                    <li>... e mais {validationErrors.length - 5} erro(s)</li>
-                  )}
                 </ul>
               </AlertDescription>
             </Alert>
           )}
-          
-          <div className="space-y-2">
-            <Label htmlFor="election_name">Nome da Votação</Label>
-            <Input
-              id="election_name"
-              value={electionName}
-              onChange={(e) => setElectionName(e.target.value)}
-              placeholder="Ex: Eleição do Condomínio 2024"
-              required
-            />
-          </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="election_number">Número da Votação</Label>
-            <Input
-              id="election_number"
-              value={electionNumber}
-              onChange={(e) => setElectionNumber(e.target.value)}
-              placeholder="Ex: 001/2024"
-              required
-            />
-          </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="election_date">Data da Votação (opcional)</Label>
-            <Input
-              id="election_date"
-              type="date"
-              value={electionDate}
-              onChange={(e) => setElectionDate(e.target.value)}
-            />
-          </div>
           
           <div className="space-y-2">
             <Label htmlFor="excel-file">Arquivo Excel</Label>
@@ -171,13 +119,10 @@ export default function UploadVoters({ onSuccess }) {
             <p className="text-sm text-gray-500">
               O Excel deve ter as colunas: nome, email, apartamento, cpf
             </p>
-            <p className="text-sm text-gray-400">
-              O CPF deve ter 11 dígitos (pode ser com ou sem formatação)
-            </p>
           </div>
           
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Enviando...' : 'Upload - Cadastro de Votantes'}
+            {loading ? 'Enviando...' : 'Upload e Cadastrar Votantes'}
           </Button>
         </form>
       </CardContent>

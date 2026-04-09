@@ -1,29 +1,33 @@
 /**
- * Módulo 1 - Lista de Votações
- * Exibe todas as votações cadastradas com botão para ver votantes
+ * Módulo 1 - Lista de Votações (Assembleias)
+ * Exibe todas as assembleias/votações cadastradas
  */
 
 import { useState, useEffect } from 'react'
+import { useParams } from 'react-router-dom'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '../../components/ui/table'
 import { Button } from '../../components/ui/button'
 import { Alert, AlertDescription } from '../../components/ui/alert'
-import { listElections } from '../../services/adminApi'
+import { getAssemblies } from '../../services/adminApi'
 import ElectionVotersModal from './ElectionVotersModal'
 
 export default function ElectionsList() {
-  const [elections, setElections] = useState([])
+  const { condId } = useParams()
+  const [assemblies, setAssemblies] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [selectedElection, setSelectedElection] = useState(null)
+  const [selectedAssembly, setSelectedAssembly] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
 
-  const loadElections = async () => {
+  const loadAssemblies = async () => {
+    if (!condId) return
+    
     setLoading(true)
-    const result = await listElections()
+    const result = await getAssemblies(condId)
     
     if (result.success) {
-      setElections(result.elections)
+      setAssemblies(result.assemblies || [])
       setError('')
     } else {
       setError(result.error)
@@ -33,11 +37,11 @@ export default function ElectionsList() {
   }
 
   useEffect(() => {
-    loadElections()
-  }, [])
+    loadAssemblies()
+  }, [condId])
 
-  const handleViewVoters = (election) => {
-    setSelectedElection(election)
+  const handleViewVoters = (assembly) => {
+    setSelectedAssembly(assembly)
     setModalOpen(true)
   }
 
@@ -57,7 +61,7 @@ export default function ElectionsList() {
         <CardHeader>
           <CardTitle>Votações Cadastradas</CardTitle>
           <CardDescription>
-            Lista de todas as votações registradas no sistema
+            Lista de todas as assembleias/votações registradas neste condomínio
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -67,10 +71,10 @@ export default function ElectionsList() {
             </Alert>
           )}
           
-          {elections.length === 0 ? (
+          {assemblies.length === 0 ? (
             <div className="text-center text-gray-500 py-8">
               Nenhuma votação cadastrada ainda.
-              Use o formulário de upload para cadastrar uma votação.
+              Use o formulário "Itens de Votação" para cadastrar uma assembleia.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -80,34 +84,32 @@ export default function ElectionsList() {
                     <TableHead>Número</TableHead>
                     <TableHead>Nome</TableHead>
                     <TableHead>Data</TableHead>
-                    <TableHead>Votantes</TableHead>
+                    <TableHead>Itens</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Cadastrado em</TableHead>
                     <TableHead>Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {elections.map((election) => (
-                    <TableRow key={election.id}>
-                      <TableCell className="font-medium">{election.election_number}</TableCell>
-                      <TableCell>{election.name}</TableCell>
-                      <TableCell>{election.date || '-'}</TableCell>
-                      <TableCell>{election.voters_count}</TableCell>
+                  {assemblies.map((assembly) => (
+                    <TableRow key={assembly.number}>
+                      <TableCell className="font-medium">{assembly.number}</TableCell>
+                      <TableCell>{assembly.name}</TableCell>
+                      <TableCell>{assembly.date ? new Date(assembly.date).toLocaleDateString() : '-'}</TableCell>
+                      <TableCell>{assembly.items_count || 0}</TableCell>
                       <TableCell>
                         <span className={`px-2 py-1 rounded-full text-xs ${
-                          election.status === 'active' 
+                          assembly.status === 'active' 
                             ? 'bg-green-100 text-green-700' 
                             : 'bg-gray-100 text-gray-700'
                         }`}>
-                          {election.status === 'active' ? 'Ativa' : 'Finalizada'}
+                          {assembly.status === 'active' ? 'Ativa' : 'Finalizada'}
                         </span>
                       </TableCell>
-                      <TableCell>{election.created_at ? new Date(election.created_at).toLocaleDateString() : '-'}</TableCell>
                       <TableCell>
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleViewVoters(election)}
+                          onClick={() => handleViewVoters(assembly)}
                           className="text-blue-600 hover:text-blue-700"
                         >
                           👥 Ver Votantes
@@ -122,11 +124,11 @@ export default function ElectionsList() {
         </CardContent>
       </Card>
       
-      {/* Modal de votantes */}
       <ElectionVotersModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        election={selectedElection}
+        election={selectedAssembly}
+        condominiumId={condId}
       />
     </>
   )

@@ -1,350 +1,241 @@
 """
-Rotas do módulo Admin
-Todas as APIs relacionadas à administração ficam aqui
+Admin routes - Complete redesigned API
 """
 
 from flask import Blueprint, request, jsonify
-from firebase_admin import auth, storage
-import os
-import tempfile
-from datetime import datetime
-from .excel_processor import process_voters_excel, validate_election_data
-from .pdf_processor import validate_pdf
-from .firestore_service import (
-    save_election, get_all_elections,
-    save_proxy, get_all_proxies, update_proxy_pdf_url,
-    save_voters_batch, is_admin_user
+from firebase_admin import auth
+import re
+
+from .condominium_service import create_condominium, get_all_condominiums, get_condominium
+from .resident_service import create_resident, get_all_residents, get_resident_by_cpf
+from .proxy_service import create_proxy, get_all_proxies
+from .assembly_service import (
+    create_assembly, add_assembly_item, get_assembly_items,
+    get_all_assemblies, update_item_release_status, update_item_lock_status
 )
+from .excel_processor import process_voters_excel, process_assembly_items_excel
+from .firestore_service import is_admin_user
 
 admin_bp = Blueprint('admin', __name__)
 
-# ============================================
-# FUNÇÃO AUXILIAR - VERIFICA TOKEN ADMIN
-# ============================================
-
 def verify_admin_token():
-    """
-    Verifica o token Firebase e se o usuário é admin
-    Retorna (user_data, error_response, status_code)
-    """
+    """Verify Firebase token and admin status"""
     auth_header = request.headers.get('Authorization', '')
-    
     if not auth_header.startswith('Bearer '):
-        return None, jsonify({'error': 'Token de autenticação ausente'}), 401
+        return None, jsonify({'error': 'Token ausente'}), 401
     
     token = auth_header.split('Bearer ')[1]
-    
     try:
-        decoded_token = auth.verify_id_token(token)
-        uid = decoded_token.get('uid')
+        decoded = auth.verify_id_token(token)
+        uid = decoded.get('uid')
         
-        # Log para debug
-        print(f"Verificando token para UID: {uid}")
-        
-        # Verifica se é admin
         if not is_admin_user(uid):
-            print(f"Usuário {uid} NÃO é admin")
-            return None, jsonify({'error': 'Acesso negado. Apenas administradores.'}), 403
+            return None, jsonify({'error': 'Acesso negado'}), 403
         
-        print(f"Usuário {uid} é admin - acesso permitido")
-        return decoded_token, None, None
-        
+        return decoded, None, None
     except Exception as e:
-        print(f"Erro na verificação do token: {str(e)}")
-        return None, jsonify({'error': f'Token inválido: {str(e)}'}), 401
+        return None, jsonify({'error': str(e)}), 401
 
-# ============================================
-# FUNÇÃO AUXILIAR - UPLOAD PARA STORAGE
-# ============================================
+# ============ CONDOMINIUMS ============
 
-def upload_pdf_to_storage(file_content, filename, apartment, proxy_id):
-    """
-    Faz upload do PDF para o Firebase Storage
+@admin_bp.route('/condominiums', methods=['GET'])
+def list_condominiums():
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
     
-    Retorna a URL pública do arquivo
-    """
-    try:
-        # Obtém o bucket configurado na inicialização do Firebase
-        bucket = storage.bucket()
-        
-        # Log para debug
-        print(f"Bucket configurado: {bucket.name}")
-        
-        # Cria um nome único para o arquivo
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        blob_name = f"proxies/{apartment}/{proxy_id}_{timestamp}.pdf"
-        
-        blob = bucket.blob(blob_name)
-        
-        # Upload do arquivo
-        blob.upload_from_string(file_content, content_type='application/pdf')
-        
-        # Torna o arquivo público (opcional - gera URL pública)
-        blob.make_public()
-        
-        print(f"PDF salvo com sucesso em: {blob.public_url}")
-        
-        return blob.public_url
-        
-    except Exception as e:
-        print(f"Erro detalhado ao fazer upload para Storage: {e}")
-        raise e
+    condominiums = get_all_condominiums()
+    return jsonify({'success': True, 'condominiums': condominiums})
 
-# ============================================
-# ROTA 1: UPLOAD DE EXCEL COM VOTANTES
-# ============================================
-
-@admin_bp.route('/upload-voters', methods=['POST'])
-def upload_voters_excel():
-    """
-    Endpoint para upload de Excel com cadastro de votantes
-    Recebe: arquivo Excel, nome da votação, número da votação
-    """
-    # Verifica autenticação
-    admin_user, error_response, status_code = verify_admin_token()
-    if error_response:
-        return error_response, status_code
+@admin_bp.route('/condominiums', methods=['POST'])
+def add_condominium():
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
     
-    # Verifica se o arquivo foi enviado
+    result = create_condominium(request.get_json())
+    return jsonify(result)
+
+@admin_bp.route('/condominiums/<cond_id>', methods=['GET'])
+def get_condominium_by_id(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    cond = get_condominium(cond_id)
+    if not cond:
+        return jsonify({'error': 'Condomínio não encontrado'}), 404
+    return jsonify({'success': True, 'condominium': cond})
+
+# ============ RESIDENTS ============
+
+@admin_bp.route('/condominiums/<cond_id>/residents', methods=['GET'])
+def list_residents(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    residents = get_all_residents(cond_id)
+    return jsonify({'success': True, 'residents': residents, 'count': len(residents)})
+
+@admin_bp.route('/condominiums/<cond_id>/residents/upload', methods=['POST'])
+def upload_residents_excel(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
     if 'file' not in request.files:
-        return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+        return jsonify({'error': 'Nenhum arquivo'}), 400
     
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'Nenhum arquivo selecionado'}), 400
-    
-    # Verifica extensão
     if not file.filename.endswith(('.xlsx', '.xls')):
-        return jsonify({'error': 'Arquivo deve ser Excel (.xlsx ou .xls)'}), 400
+        return jsonify({'error': 'Formato deve ser Excel'}), 400
     
-    # Obtém dados da votação
-    election_name = request.form.get('election_name')
-    election_number = request.form.get('election_number')
-    election_date = request.form.get('election_date')
-    
-    # Log para debug
-    print(f"Recebendo Excel - Votação: {election_name}, Número: {election_number}")
-    
-    # Valida dados da votação
-    validation = validate_election_data(election_name, election_number)
-    if not validation['valid']:
-        return jsonify({'error': validation['errors'][0]}), 400
-    
-    # Processa o Excel
-    file_content = file.read()
-    result = process_voters_excel(file_content)
-    
+    result = process_voters_excel(file.read())
     if not result['success']:
         return jsonify({'error': result['error']}), 400
     
-    # Salva a votação no Firestore
-    election_id = save_election({
-        'name': election_name,
-        'election_number': election_number,
-        'date': election_date,
-        'voters_count': len(result['data'])
-    })
-    
-    # Salva os votantes em lote
-    voters_saved = save_voters_batch(result['data'], election_number)
+    created = 0
+    errors = []
+    for resident in result['data']:
+        try:
+            create_resident(cond_id, resident)
+            created += 1
+        except Exception as e:
+            errors.append(f"{resident['email']}: {str(e)}")
     
     return jsonify({
         'success': True,
-        'message': 'Votação e votantes cadastrados com sucesso',
-        'election_id': election_id,
-        'election_number': election_number,
-        'voters_saved': voters_saved,
-        'total_in_file': result['total_rows'],
-        'valid_voters': result['valid_rows']
-    }), 200
+        'created': created,
+        'total': result['valid_rows'],
+        'errors': errors,
+        'warnings': result.get('errors', [])
+    })
 
-# ============================================
-# ROTA 2: UPLOAD DE PDF (PROCURAÇÃO) COM STORAGE
-# ============================================
+# ============ PROXIES ============
 
-@admin_bp.route('/upload-proxy', methods=['POST'])
-def upload_proxy_pdf():
-    """
-    Endpoint para upload de PDF de procuração
-    Recebe: arquivo PDF + dados do formulário
-    O PDF é salvo no Firebase Storage
-    """
-    # Verifica autenticação
-    admin_user, error_response, status_code = verify_admin_token()
-    if error_response:
-        return error_response, status_code
+@admin_bp.route('/condominiums/<cond_id>/proxies', methods=['GET'])
+def list_proxies(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
     
-    # Verifica se o arquivo foi enviado
+    proxies = get_all_proxies(cond_id)
+    return jsonify({'success': True, 'proxies': proxies, 'count': len(proxies)})
+
+@admin_bp.route('/condominiums/<cond_id>/proxies', methods=['POST'])
+def add_proxy(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    data = request.get_json()
+    data['created_by'] = admin.get('email')
+    
+    try:
+        result = create_proxy(cond_id, data)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+# ============ ASSEMBLIES ============
+
+@admin_bp.route('/condominiums/<cond_id>/assemblies', methods=['GET'])
+def list_assemblies(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    assemblies = get_all_assemblies(cond_id)
+    return jsonify({'success': True, 'assemblies': assemblies})
+
+@admin_bp.route('/condominiums/<cond_id>/assemblies', methods=['POST'])
+def create_assembly_endpoint(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    data = request.get_json()
+    data['created_by'] = admin.get('email')
+    
+    result = create_assembly(cond_id, data)
+    return jsonify(result)
+
+@admin_bp.route('/condominiums/<cond_id>/assemblies/<assembly_number>/items', methods=['GET'])
+def get_items(cond_id, assembly_number):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    items = get_assembly_items(cond_id, assembly_number)
+    return jsonify({'success': True, 'items': items})
+
+@admin_bp.route('/condominiums/<cond_id>/assemblies/<assembly_number>/items', methods=['POST'])
+def add_item(cond_id, assembly_number):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    result = add_assembly_item(cond_id, assembly_number, request.get_json())
+    return jsonify(result)
+
+@admin_bp.route('/condominiums/<cond_id>/assemblies/<assembly_number>/items/<item_id>/release', methods=['PUT'])
+def release_item(cond_id, assembly_number, item_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    is_released = request.get_json().get('is_released', False)
+    update_item_release_status(cond_id, assembly_number, item_id, is_released)
+    return jsonify({'success': True})
+
+@admin_bp.route('/condominiums/<cond_id>/assemblies/<assembly_number>/items/<item_id>/lock', methods=['PUT'])
+def lock_item(cond_id, assembly_number, item_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
+    is_locked = request.get_json().get('is_locked', False)
+    update_item_lock_status(cond_id, assembly_number, item_id, is_locked)
+    return jsonify({'success': True})
+
+@admin_bp.route('/condominiums/<cond_id>/assemblies/upload-excel', methods=['POST'])
+def upload_assembly_excel(cond_id):
+    admin, err, code = verify_admin_token()
+    if err:
+        return err, code
+    
     if 'file' not in request.files:
-        return jsonify({'error': 'Nenhum arquivo enviado'}), 400
+        return jsonify({'error': 'Nenhum arquivo'}), 400
     
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'Nenhum arquivo selecionado'}), 400
+    assembly_name = request.form.get('assembly_name')
+    assembly_number = request.form.get('assembly_number')
+    assembly_date = request.form.get('assembly_date')
     
-    # Verifica extensão
-    if not file.filename.endswith('.pdf'):
-        return jsonify({'error': 'Arquivo deve ser PDF'}), 400
+    if not assembly_number:
+        return jsonify({'error': 'Número da votação é obrigatório'}), 400
     
-    # Obtém os dados do formulário
-    apartment = request.form.get('apartment', '').strip()
-    grantor_email = request.form.get('grantor_email', '').strip().lower()
-    grantor_cpf = request.form.get('grantor_cpf', '').strip()
-    grantee_cpf = request.form.get('grantee_cpf', '').strip()
+    result = process_assembly_items_excel(file.read())
+    if not result['success']:
+        return jsonify({'error': result['error']}), 400
     
-    # Log para debug
-    print("=" * 50)
-    print("Recebendo upload de procuração:")
-    print(f"  - Apartamento: {apartment}")
-    print(f"  - Email outorgante: {grantor_email}")
-    print(f"  - CPF outorgante: {grantor_cpf}")
-    print(f"  - CPF outorgado: {grantee_cpf}")
-    print(f"  - Arquivo: {file.filename}")
-    print("=" * 50)
-    
-    # Valida dados obrigatórios
-    missing_fields = []
-    if not apartment:
-        missing_fields.append('apartamento')
-    if not grantor_email:
-        missing_fields.append('email do outorgante')
-    if not grantor_cpf:
-        missing_fields.append('CPF do outorgante')
-    if not grantee_cpf:
-        missing_fields.append('CPF do outorgado')
-    
-    if missing_fields:
-        return jsonify({
-            'error': f'Campos obrigatórios faltando: {", ".join(missing_fields)}'
-        }), 400
-    
-    # Valida formato do email
-    if '@' not in grantor_email or '.' not in grantor_email:
-        return jsonify({'error': 'Email do outorgante inválido'}), 400
-    
-    # Valida CPFs (11 dígitos)
-    def validar_cpf(cpf):
-        cpf_clean = ''.join(filter(str.isdigit, cpf))
-        return len(cpf_clean) == 11
-    
-    if not validar_cpf(grantor_cpf):
-        return jsonify({'error': 'CPF do outorgante inválido (deve ter 11 dígitos)'}), 400
-    
-    if not validar_cpf(grantee_cpf):
-        return jsonify({'error': 'CPF do outorgado inválido (deve ter 11 dígitos)'}), 400
-    
-    # Valida o PDF
-    file_content = file.read()
-    validation = validate_pdf(file_content)
-    
-    if not validation['success']:
-        return jsonify({'error': validation['error']}), 400
-    
-    # Primeiro, salva os dados no Firestore para obter o ID
-    proxy_id = save_proxy({
-        'apartment': apartment,
-        'grantor_email': grantor_email,
-        'grantor_cpf': grantor_cpf,
-        'grantee_cpf': grantee_cpf,
-        'original_filename': file.filename,
-        'pdf_page_count': validation['page_count'],
-        'pdf_url': None  # Será atualizado após upload
+    # Create assembly
+    create_assembly(cond_id, {
+        'name': assembly_name,
+        'number': assembly_number,
+        'date': assembly_date,
+        'informative_text': result['informative_text'],
+        'description': result['informative_text'][:200],
+        'created_by': admin.get('email')
     })
     
-    # Faz upload do PDF para o Storage
-    try:
-        pdf_url = upload_pdf_to_storage(file_content, file.filename, apartment, proxy_id)
-        
-        # Atualiza o documento com a URL do PDF
-        update_proxy_pdf_url(proxy_id, pdf_url)
-        
-        return jsonify({
-            'success': True,
-            'message': 'Procuração cadastrada com sucesso',
-            'proxy_id': proxy_id,
-            'pdf_url': pdf_url,
-            'data': {
-                'apartment': apartment,
-                'grantor_email': grantor_email,
-                'grantor_cpf': grantor_cpf,
-                'grantee_cpf': grantee_cpf,
-                'filename': file.filename
-            }
-        }), 200
-        
-    except Exception as e:
-        # Se falhar o upload, ainda temos os dados no Firestore
-        return jsonify({
-            'success': False,
-            'error': f'Erro ao salvar o PDF: {str(e)}. Os dados foram salvos, mas o arquivo não.',
-            'proxy_id': proxy_id
-        }), 500
-
-# ============================================
-# ROTA 3: LISTAR VOTAÇÕES
-# ============================================
-
-@admin_bp.route('/elections', methods=['GET'])
-def list_elections():
-    """
-    Retorna todas as votações cadastradas
-    """
-    # Verifica autenticação
-    admin_user, error_response, status_code = verify_admin_token()
-    if error_response:
-        return error_response, status_code
-    
-    elections = get_all_elections()
+    # Add items
+    for item in result['items']:
+        add_assembly_item(cond_id, assembly_number, item)
     
     return jsonify({
         'success': True,
-        'elections': elections,
-        'count': len(elections)
-    }), 200
-
-# ============================================
-# ROTA 4: LISTAR PROCURAÇÕES
-# ============================================
-
-@admin_bp.route('/proxies', methods=['GET'])
-def list_proxies():
-    """
-    Retorna todas as procurações cadastradas
-    """
-    # Verifica autenticação
-    admin_user, error_response, status_code = verify_admin_token()
-    if error_response:
-        return error_response, status_code
-    
-    proxies = get_all_proxies()
-    
-    return jsonify({
-        'success': True,
-        'proxies': proxies,
-        'count': len(proxies)
-    }), 200
-
-# ============================================
-# ROTA 5: LISTAR VOTANTES POR VOTAÇÃO
-# ============================================
-
-@admin_bp.route('/voters/<election_number>', methods=['GET'])
-def list_voters_by_election(election_number):
-    """
-    Retorna todos os votantes de uma votação específica
-    """
-    # Verifica autenticação
-    admin_user, error_response, status_code = verify_admin_token()
-    if error_response:
-        return error_response, status_code
-    
-    # Busca os votantes
-    from .firestore_service import get_voters_by_election
-    voters = get_voters_by_election(election_number)
-    
-    return jsonify({
-        'success': True,
-        'voters': voters,
-        'count': len(voters),
-        'election_number': election_number
-    }), 200
+        'message': f'Assembleia criada com {result["total_items"]} itens',
+        'items': result['items']
+    })

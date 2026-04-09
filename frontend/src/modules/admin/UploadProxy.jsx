@@ -1,32 +1,28 @@
 /**
  * Módulo 1 - Upload de Procuração
- * Formulário completo com campos para:
- * - Apartamento
- * - Email do outorgante
- * - CPF do outorgante
- * - CPF do outorgado
- * - Upload do PDF da procuração
+ * Formulário com upload de PDF e dados da procuração
  */
 
 import { useState } from 'react'
+import { useParams } from 'react-router-dom'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { Alert, AlertDescription } from '../../components/ui/alert'
-import { uploadProxyPdf } from '../../services/adminApi'
+import { createProxy } from '../../services/adminApi'
+import { uploadProxyFile } from '../../services/storageService'  // New service
 
 export default function UploadProxy({ onSuccess }) {
-  const [file, setFile] = useState(null)
-  const [apartment, setApartment] = useState('')
-  const [grantorEmail, setGrantorEmail] = useState('')
+  const { condId } = useParams()
   const [grantorCpf, setGrantorCpf] = useState('')
-  const [granteeCpf, setGranteeCpf] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [granteeEmail, setGranteeEmail] = useState('')
+  const [granteeName, setGranteeName] = useState('')
+  const [file, setFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  // Função para formatar CPF automaticamente
   const formatCpf = (value) => {
     const digits = value.replace(/\D/g, '')
     if (digits.length <= 3) return digits
@@ -35,14 +31,9 @@ export default function UploadProxy({ onSuccess }) {
     return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`
   }
 
-  const handleCpfChange = (setter) => (e) => {
-    const formatted = formatCpf(e.target.value)
-    setter(formatted)
-  }
-
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0]
-    if (selectedFile && selectedFile.name.endsWith('.pdf')) {
+    if (selectedFile && selectedFile.type === 'application/pdf') {
       setFile(selectedFile)
       setError('')
     } else {
@@ -54,70 +45,60 @@ export default function UploadProxy({ onSuccess }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     
-    // Validações
-    if (!file) {
-      setError('Selecione o arquivo PDF da procuração')
-      return
-    }
-    
-    if (!apartment.trim()) {
-      setError('Digite o número do apartamento')
-      return
-    }
-    
-    if (!grantorEmail.trim()) {
-      setError('Digite o email do outorgante')
-      return
-    }
-    
-    // Valida email
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!emailRegex.test(grantorEmail)) {
-      setError('Email do outorgante inválido')
-      return
-    }
-    
-    // Valida CPF outorgante
     const cpfDigits = grantorCpf.replace(/\D/g, '')
+    
     if (cpfDigits.length !== 11) {
       setError('CPF do outorgante deve ter 11 dígitos')
       return
     }
     
-    // Valida CPF outorgado
-    const cpfGranteeDigits = granteeCpf.replace(/\D/g, '')
-    if (cpfGranteeDigits.length !== 11) {
-      setError('CPF do outorgado deve ter 11 dígitos')
+    if (!granteeEmail.trim()) {
+      setError('Email do outorgado é obrigatório')
       return
     }
     
-    setLoading(true)
+    if (!granteeName.trim()) {
+      setError('Nome do outorgado é obrigatório')
+      return
+    }
+    
+    if (!file) {
+      setError('Selecione o arquivo PDF da procuração')
+      return
+    }
+    
+    setUploading(true)
     setError('')
     setSuccess('')
     
-    const result = await uploadProxyPdf(file, {
-      apartment: apartment,
-      grantor_email: grantorEmail,
-      grantor_cpf: cpfDigits,  // envia apenas dígitos
-      grantee_cpf: cpfGranteeDigits
-    })
-    
-    if (result.success) {
-      setSuccess(`Procuração cadastrada com sucesso! Apartamento ${apartment}`)
-      // Limpa o formulário
-      setFile(null)
-      setApartment('')
-      setGrantorEmail('')
-      setGrantorCpf('')
-      setGranteeCpf('')
-      // Limpa o input file
-      document.getElementById('pdf-file').value = ''
-      if (onSuccess) onSuccess()
-    } else {
-      setError(result.error)
+    try {
+      // 1. Upload PDF to Firebase Storage
+      const pdfUrl = await uploadProxyFile(condId, file, grantorCpf)
+      
+      // 2. Create proxy record in Firestore
+      const result = await createProxy(condId, {
+        grantor_cpf: cpfDigits,
+        grantee_email: granteeEmail,
+        grantee_name: granteeName,
+        pdf_url: pdfUrl
+      })
+      
+      if (result.success) {
+        setSuccess(`Procuração cadastrada com sucesso!`)
+        setGrantorCpf('')
+        setGranteeEmail('')
+        setGranteeName('')
+        setFile(null)
+        document.getElementById('pdf-file').value = ''
+        if (onSuccess) onSuccess()
+      } else {
+        setError(result.error)
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setUploading(false)
     }
-    
-    setLoading(false)
   }
 
   return (
@@ -125,8 +106,8 @@ export default function UploadProxy({ onSuccess }) {
       <CardHeader>
         <CardTitle>Cadastro de Procuração</CardTitle>
         <CardDescription>
-          Preencha todos os campos abaixo e faça o upload do arquivo PDF da procuração.
-          O PDF será armazenado no Firebase Storage.
+          Preencha os dados e faça upload do PDF da procuração.
+          O outorgante (quem dá a procuração) não poderá votar.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -143,65 +124,42 @@ export default function UploadProxy({ onSuccess }) {
             </Alert>
           )}
           
-          {/* Campo: Apartamento */}
           <div className="space-y-2">
-            <Label htmlFor="apartment">Número do Apartamento *</Label>
+            <Label htmlFor="grantor_cpf">CPF do Outorgante (quem dá a procuração) *</Label>
             <Input
-              id="apartment"
-              type="text"
-              value={apartment}
-              onChange={(e) => setApartment(e.target.value)}
-              placeholder="Ex: 101, 202, 305"
+              id="grantor_cpf"
+              value={grantorCpf}
+              onChange={(e) => setGrantorCpf(formatCpf(e.target.value))}
+              placeholder="123.456.789-00"
+              maxLength={14}
               required
             />
-            <p className="text-sm text-gray-500">Número do apartamento do outorgante</p>
+            <p className="text-sm text-gray-500">Esta pessoa não poderá votar</p>
           </div>
           
-          {/* Campo: Email do Outorgante */}
           <div className="space-y-2">
-            <Label htmlFor="grantor_email">Email do Outorgante *</Label>
+            <Label htmlFor="grantee_email">Email do Outorgado (quem recebe) *</Label>
             <Input
-              id="grantor_email"
+              id="grantee_email"
               type="email"
-              value={grantorEmail}
-              onChange={(e) => setGrantorEmail(e.target.value)}
+              value={granteeEmail}
+              onChange={(e) => setGranteeEmail(e.target.value)}
               placeholder="email@exemplo.com"
               required
             />
-            <p className="text-sm text-gray-500">Email da pessoa que está dando a procuração</p>
           </div>
           
-          {/* Campo: CPF do Outorgante */}
           <div className="space-y-2">
-            <Label htmlFor="grantor_cpf">CPF do Outorgante *</Label>
+            <Label htmlFor="grantee_name">Nome do Outorgado *</Label>
             <Input
-              id="grantor_cpf"
-              type="text"
-              value={grantorCpf}
-              onChange={handleCpfChange(setGrantorCpf)}
-              placeholder="123.456.789-00"
-              maxLength={14}
+              id="grantee_name"
+              value={granteeName}
+              onChange={(e) => setGranteeName(e.target.value)}
+              placeholder="Nome completo"
               required
             />
-            <p className="text-sm text-gray-500">CPF da pessoa que está dando a procuração</p>
           </div>
           
-          {/* Campo: CPF do Outorgado */}
-          <div className="space-y-2">
-            <Label htmlFor="grantee_cpf">CPF do Outorgado *</Label>
-            <Input
-              id="grantee_cpf"
-              type="text"
-              value={granteeCpf}
-              onChange={handleCpfChange(setGranteeCpf)}
-              placeholder="123.456.789-00"
-              maxLength={14}
-              required
-            />
-            <p className="text-sm text-gray-500">CPF da pessoa que está recebendo a procuração</p>
-          </div>
-          
-          {/* Campo: Upload do PDF */}
           <div className="space-y-2">
             <Label htmlFor="pdf-file">Arquivo PDF da Procuração *</Label>
             <Input
@@ -211,11 +169,11 @@ export default function UploadProxy({ onSuccess }) {
               onChange={handleFileChange}
               required
             />
-            <p className="text-sm text-gray-500">Envie o PDF da procuração (uma página)</p>
+            <p className="text-sm text-gray-500">Envie o PDF da procuração</p>
           </div>
           
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Cadastrando...' : 'Cadastrar Procuração'}
+          <Button type="submit" className="w-full" disabled={uploading}>
+            {uploading ? 'Enviando...' : 'Cadastrar Procuração'}
           </Button>
         </form>
       </CardContent>
